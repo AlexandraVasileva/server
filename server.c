@@ -8,6 +8,7 @@
 #include <sys/ipc.h>
 #include <sys/sem.h>
 #include <sys/msg.h>
+#include <string.h>
 
 #define FILENAME "matrix"
 #define IPCNAME "/bin/bash"
@@ -22,6 +23,7 @@ struct targ {
 	int clnum;
 	int* final_res;
 	int n;
+	int mesid;
 };
 
 struct inf { // received
@@ -49,21 +51,10 @@ void * threadf (void * temporal){ // the thread function
 	int cl = (*arguments).column;
 	int mynum = (*arguments).clnum;
 	int n = (*arguments).n;
+	int mesid = (*arguments).mesid;
 
 	int integer = sizeof(int);
 
-
-	key_t mkey = ftok(IPCNAME, 2); // creating the messagebox
-	if(mkey < 0){
-		printf("Error: cannot generate the key\n");
-		exit(-1);
-	}
-
-	int mesid = msgget (mkey, 0666|IPC_CREAT); // messagebox ID
-	if(mesid < 0){
-		printf("Error: cannot create the messagebox\n");
-		exit(-1);
-	}
 
 	struct mymsgbuf signal, endsignal;
 
@@ -86,7 +77,7 @@ void * threadf (void * temporal){ // the thread function
 
 	struct array *ready = malloc(sizeof(struct array) + sizeof(int) * rp);
 
-	if(msgrcv(mesid, ready, rp * sizeof(int), 4*mynum+3, MSG_NOERROR) < 0){
+	if(msgrcv(mesid, ready, rp * sizeof(int), 4*mynum+3, 0) < 0){
 		printf("Error: cannot receive the result message\n");
 		exit(-1);
 	}
@@ -182,6 +173,18 @@ int main(int argc, char* argv[]){
 		exit(-1);
 	}
 
+	key_t mkey = ftok(IPCNAME, 2); // creating the messagebox
+	if(mkey < 0){
+		printf("Error: cannot generate the key\n");
+		exit(-1);
+	}
+
+	int mesid = msgget (mkey, 0666|IPC_CREAT); // messagebox ID
+	if(mesid < 0){
+		printf("Error: cannot create the messagebox\n");
+		exit(-1);
+	}
+
 
 	for(k=0; k<(m-uneven); k++){ // creating threads
 		arg[k].repeat = portion;
@@ -191,6 +194,7 @@ int main(int argc, char* argv[]){
 		arg[k].column = (portion*k)%n;
 		arg[k].clnum = k;
 		arg[k].n = n;
+		arg[k].mesid = mesid;
 		if(pthread_create(&(names[k]), NULL, threadf, (void *)(arg+k)) != 0){
 			printf("Error: cannot create the new thread\n");
 			exit(-1);
@@ -205,6 +209,7 @@ int main(int argc, char* argv[]){
 		arg[k].column = ((m-uneven)*portion + (portion+1)*(k-m+uneven))%n;
 		arg[k].clnum = k;
 		arg[k].n = n;
+		arg[k].mesid = mesid;
 		if(pthread_create(&(names[k]), NULL, threadf, (void *)(arg+k)) != 0){
 			printf("Error: cannot create the new thread\n");
 			exit(-1);
@@ -224,22 +229,48 @@ int main(int argc, char* argv[]){
 	}
 	
 
-	if(close(ST_OUT) < 0){
+/*	if(close(ST_OUT) < 0){
 		printf("Error: cannot close standard output\n");
 		exit(-1);
 	}
 	
-
+*/
 	if((fd = open(ANSWERNAME, O_WRONLY|O_CREAT, 0666)) < 0){
 		printf("Error: cannot create the answer file\n");
 		exit(-1);
 	}
-
+/*
 	for(k = 0; k < counter; k++){
 		printf("%d ", *(result + k));
 		if((k+1)%n == 0){
 			printf("\n");
 		}
+	}
+*/
+	char* num = (char*)malloc(10);
+	char space = ' ';
+	char enter = '\n';
+	
+	for(k = 0; k < counter; k++){
+		sprintf(num, "%d", *(result+k));
+		num = (char*)realloc(num, strlen(num)+1);
+		if(write(fd, num, sizeof(int)) != sizeof(int)){
+			printf("Error: cannot print the result array\n");
+			exit(-1);
+		}
+	
+		if(write(fd, &space, sizeof(char)) != sizeof(char)){
+			printf("Error: cannot print the result array\n");
+			exit(-1);
+		}
+	
+		if(((k+1)%n) == 0){
+			if(write(fd, &enter, sizeof(char)) != sizeof(char)){
+				printf("Error: cannot print the result array\n");
+				exit(-1);
+			}
+		}
+	
 	}
 
 	if(semctl(descr, 0, IPC_RMID, NULL) < 0){
