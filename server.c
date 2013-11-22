@@ -53,6 +53,7 @@ void * threadf (void * temporal){ // the thread function
 	int integer = sizeof(int);
 
 
+	// AP: очередь должна быть одна и перенесите код ее создания в main
 	key_t mkey = ftok(IPCNAME, 2); // creating the messagebox
 	if(mkey < 0){
 		printf("Error: cannot generate the key\n");
@@ -79,6 +80,7 @@ void * threadf (void * temporal){ // the thread function
 	info.line = ln;
 	info.column = cl;
 
+	// AP: клиенту нужно передать все матрицы для умножения через сообщения
 	if(msgsnd(mesid, &info, 3*sizeof(int), 0) == -1){
 		printf("Error: cannot send the task message\n");
 		exit(-1);
@@ -86,6 +88,7 @@ void * threadf (void * temporal){ // the thread function
 
 	struct array *ready = malloc(sizeof(struct array) + sizeof(int) * rp);
 
+	// AP: зачем здесь MSG_NOERROR - должно работать без него
 	if(msgrcv(mesid, ready, rp * sizeof(int), 4*mynum+3, MSG_NOERROR) < 0){
 		printf("Error: cannot receive the result message\n");
 		exit(-1);
@@ -160,7 +163,7 @@ int main(int argc, char* argv[]){
 	pthread_t names[m];
 	int k, rest;
 
-
+	 //AP: семафоры должны удалться и создаваться только на стороне клиента - сервер ничего не должен знать про них
 	key_t skey = ftok(IPCNAME, 0); // creating the semaphore
 	if(skey < 0){
 		printf("Error: cannot generate the key\n");
@@ -229,12 +232,13 @@ int main(int argc, char* argv[]){
 		exit(-1);
 	}
 	
-
+	
 	if((fd = open(ANSWERNAME, O_WRONLY|O_CREAT, 0666)) < 0){
 		printf("Error: cannot create the answer file\n");
 		exit(-1);
 	}
 
+	// AP: так не пойдет - записывайте в файл четно через write с обработкой всех возможных ситуаций
 	for(k = 0; k < counter; k++){
 		printf("%d ", *(result + k));
 		if((k+1)%n == 0){
