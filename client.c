@@ -48,6 +48,7 @@ void semprint(struct sembuf mybuf, int descr, int mynum, char* message){
 		exit(-1);
 	}
 
+	// AP: нужно писать в файл честно через write
 	printf("Client %d %s\n", mynum, message); // critical section
 
 	mybuf.sem_op = 1;
@@ -69,6 +70,7 @@ int* clientf ( int rp, int ln, int cl){ // the client function
 	int* matrix = (int*)malloc(integer);
 	int* result = (int*)malloc(rp*integer);
 
+	// AP: матрицы для умножения нцжно получить от сервера через сообщения
 	if((fd = open(filename, O_RDONLY, 0)) < 0){
 		printf("Error: cannot open the matrix file\n");
 		exit(-1);
@@ -186,6 +188,7 @@ int main(int argc, char* argv[]){
 	ready->mtype = 4*mynum+3;
 	memcpy(ready->result, result, info.repeat * sizeof(int));
 
+	// AP: результат может быть больше макс размера сообщения - это нужно учесть
 	if(msgsnd(mesid, ready, info.repeat*sizeof(int), 0) == -1){
 		printf("Error: cannot send the result message\n");
 		exit(-1);
