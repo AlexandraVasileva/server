@@ -16,13 +16,21 @@
 #define BUF 2
 #define TNUM 2
 #define ST_OUT 1
+#define PART 8
 
-struct inf { // received
+struct info_coord {
 	long mtype;
 	int repeat;
 	int line;
 	int column;
+	int n;
 };
+
+struct info_partmatrix {
+	long mtype;
+	int partmatrix[0];
+};
+
 
 struct array {
 	long mtype;
@@ -61,40 +69,15 @@ void semprint(struct sembuf mybuf, int descr, int mynum, char* message){
 }
 
 
-int* clientf ( int rp, int ln, int cl){ // the client function
-	int i, j, res, n, fd;
+int* clientf (int rp, int ln, int cl, int n, int* matrix){ // the client function
+	int i, j, res;
 	int integer = sizeof(int);
-	char* filename = FILENAME;
-
-	int* matrix = (int*)malloc(integer);
 	int* result = (int*)malloc(rp*integer);
-
-	if((fd = open(filename, O_RDONLY, 0)) < 0){
-		printf("Error: cannot open the matrix file\n");
-		exit(-1);
-	}
-
-	size_t size;
-	int counter = 0;
-	while((size = read(fd, matrix+counter, BUF*integer)) != 0){ // reading the matrix from shared memory into one big array
-		if(size < 0){
-			printf("Error:cannot read the matrix file\n");
-			exit(-1);
-		}
-		counter += size/integer;
-		matrix = (int*)realloc(matrix, (counter + 1)*integer);
-	}
-
-	counter += size/integer;
-	matrix = (int*)realloc(matrix, (counter + 1)*integer);
-	counter /= 2;
-	n = (int)sqrt((double)counter); // matrix size
-
 
 	for(j = 0; j < rp; j++){
 		res = 0;	
 		for(i=0; i<n; i++){
-			res += (matrix[n*ln+i] * matrix[counter+cl+n*i]);
+			res += (matrix[n*ln+i] * matrix[n*n+cl+n*i]);
 		}
 		result[j] = res;
 		cl++;
@@ -163,38 +146,70 @@ int main(int argc, char* argv[]){
 
 
 	struct mymsgbuf signal;
-	signal.mtype = 4*mynum+1;
+	signal.mtype = 5*mynum+1;
 	signal.mtext[0] = 's';
 
-	
 	if(msgsnd(mesid, &signal, sizeof(char), 0) == -1){
 		printf("Error: cannot send the start message\n");
 		exit(-1);
 	}
 
-	struct inf info;
-	if(msgrcv(mesid, &info, 3*sizeof(int), 4*mynum+2, 0) != 3*sizeof(int)){
+	int part = PART;
+	struct info_coord info_coord;
+	if(msgrcv(mesid, &info_coord, 5*sizeof(int), 5*mynum+2, 0) != 5*sizeof(int)){
 		printf("Error: cannot read the task message\n");
 		exit(-1);
 	}
 
+	int* matrix = malloc(info_coord.n*sizeof(int));
+
+	struct info_partmatrix *info_partmatrix = malloc(sizeof(struct info_partmatrix) + part*sizeof(int));
+	int partnum = 2*info_coord.n*info_coord.n/part;
+	if((2*info_coord.n*info_coord.n % part) != 0) partnum++;
+	int read;
+
+	int i;
+	for(i=0; i<partnum; i++){
+		memcpy(info_partmatrix->partmatrix, matrix+i*part, part*sizeof(int));
+		if((read = msgrcv(mesid, info_partmatrix, part*sizeof(int), 5*mynum+3, 0)) == -1){
+			printf("Error: cannot read the task message (partmatrix)\n");
+			exit(-1);
+		}
+		memcpy(matrix+i*part, info_partmatrix->partmatrix, read);	
+	}
+
 	semprint (mybuf, descr, mynum, "got the data and is counting");
 
-	int* result = clientf(info.repeat, info.line, info.column);
+	int* result = clientf(info_coord.repeat, info_coord.line, info_coord.column, info_coord.n, matrix);
 
-	struct array *ready = malloc(sizeof(struct array) + info.repeat * sizeof(int));
-	ready->mtype = 4*mynum+3;
-	memcpy(ready->result, result, info.repeat * sizeof(int));
+	struct array *ready = malloc(sizeof(struct array) + part*sizeof(int));
+	ready->mtype = 5*mynum+4;
 
-	if(msgsnd(mesid, ready, info.repeat*sizeof(int), 0) == -1){
+	partnum = info_coord.repeat/part;
+	if((info_coord.repeat%part) != 0) partnum ++;
+	
+	for(i=0; i<(partnum-1); i++){	
+		memcpy(ready->result, result+i*part, part*sizeof(int));
+		if(msgsnd(mesid, ready, part*sizeof(int), 0) == -1){
+			printf("Error: cannot send the result message\n");
+			exit(-1);
+		}
+	}
+	
+	int left = info_coord.repeat%part;
+	if(left == 0) left = part;
+
+	memcpy(ready->result, result+(partnum-1)*part, left*sizeof(int));
+	if(msgsnd(mesid, ready, left*sizeof(int), 0) == -1){
 		printf("Error: cannot send the result message\n");
 		exit(-1);
 	}
+		printf("RES %d\n", result[i*part]);
 
 	semprint (mybuf, descr, mynum, "has sent his result data and is ready to quit");
 
 	struct mymsgbuf endsignal;
-	if(msgrcv(mesid, &endsignal, sizeof(char), 4*mynum+4, 0) != sizeof(char)){
+	if(msgrcv(mesid, &endsignal, sizeof(char), 5*mynum+5, 0) != sizeof(char)){
 		printf("Error: cannot receive the end signal\n");
 		exit(-1);
 	}

@@ -15,6 +15,7 @@
 #define ST_OUT 1
 #define ANSWERNAME "server_answer"
 #define BUF 2
+#define PART 8
 
 struct targ {
 	int repeat; // how many operations this thread has to carry out
@@ -24,13 +25,20 @@ struct targ {
 	int* final_res;
 	int n;
 	int mesid;
+	int* matrix;
 };
 
-struct inf { // received
+struct info_coord {
 	long mtype;
 	int repeat;
 	int line;
 	int column;
+	int n;
+};
+
+struct info_partmatrix {
+	long mtype;
+	int partmatrix[0];
 };
 
 struct array {
@@ -52,45 +60,75 @@ void * threadf (void * temporal){ // the thread function
 	int mynum = (*arguments).clnum;
 	int n = (*arguments).n;
 	int mesid = (*arguments).mesid;
-
+	int* matrix = malloc(2*n*n*sizeof(int));
+	matrix = (*arguments).matrix;
+	
 	int integer = sizeof(int);
-
+	int part = PART;
 
 	struct mymsgbuf signal, endsignal;
 
-
-	if(msgrcv(mesid, &signal, sizeof(char), 4*mynum+1, 0) < 0){
+	if(msgrcv(mesid, &signal, sizeof(char), 5*mynum+1, 0) < 0){
 		printf("Error: cannot receive the start message\n");
 		exit(-1);
 	}
-
-	struct inf info;
-	info.mtype = 4*mynum+2;
-	info.repeat = rp;
-	info.line = ln;
-	info.column = cl;
-
-	if(msgsnd(mesid, &info, 3*sizeof(int), 0) == -1){
-		printf("Error: cannot send the task message\n");
+	struct info_coord *info_coord = malloc(sizeof (struct info_coord));
+	info_coord->mtype = 5*mynum+2;
+	info_coord->repeat = rp;
+	info_coord->line = ln;
+	info_coord->column = cl;
+	info_coord->n = n;
+	if(msgsnd(mesid, info_coord, 5*sizeof(int), 0) == -1){
+		printf("Error: cannot send the task message (coordinates)\n");
 		exit(-1);
 	}
+	int partnum = 2*n*n/part;
+	if(2*n*n % part != 0) partnum ++;
 
-	struct array *ready = malloc(sizeof(struct array) + sizeof(int) * rp);
+	struct info_partmatrix *info_partmatrix = malloc(sizeof(struct info_partmatrix) + part*sizeof(int));
+	info_partmatrix->mtype = 5*mynum+3;
 
-	if(msgrcv(mesid, ready, rp * sizeof(int), 4*mynum+3, 0) < 0){
-		printf("Error: cannot receive the result message\n");
+	for(i=0; i<(partnum-1); i++){
+		memcpy(info_partmatrix->partmatrix, matrix+i*part, part*sizeof(int));
+		if(msgsnd(mesid, info_partmatrix, part*sizeof(int), 0) == -1){
+			printf("Error: cannot send the task message (partmatrix)\n");
+			exit(-1);
+		}
+	}
+
+	int left = 2*n*n % part;
+	if(left == 0) left = part;
+	memcpy(info_partmatrix->partmatrix, matrix+(partnum-1)*part, left*sizeof(int));
+
+	if(msgsnd(mesid, info_partmatrix, left*sizeof(int), 0) == -1){
+		printf("Error: cannot send the task message (partmatrix)\n");
 		exit(-1);
 	}
-	endsignal.mtype = 4*mynum+4;
+	
+	struct array *ready = malloc(sizeof(struct array) + part*sizeof(int));
+	int* ready_final = malloc(rp*sizeof(int));
+	partnum = rp/part;
+	if(rp%part != 0) partnum ++;
+
+	int received;
+	
+	for(i=0; i<partnum; i++){
+		if((received = msgrcv(mesid, ready, part*sizeof(int), 5*mynum+4, 0)) < 0){
+			printf("Error: cannot receive the result message\n");
+			exit(-1);
+		}
+		memcpy(ready_final+i*part, ready->result, received);
+	}
+
+	endsignal.mtype = 5*mynum+5;
 	endsignal.mtext[0] = 'f';
 
 	if(msgsnd(mesid, &endsignal, sizeof(char), 0) == -1){
 		printf("Error: cannot send the end signal\n");
 		exit(-1);
 	}
-
 	// writing the results
-	for(i=0; i<rp; i++) arguments->final_res[n*ln+cl+i] = ready->result[i];
+	memcpy((arguments->final_res)+n*ln+cl, ready_final, rp*sizeof(int));
 
 	return;
 }
@@ -147,7 +185,7 @@ int main(int argc, char* argv[]){
 	int uneven = counter % m;
 	int portion = (counter - uneven) / m; // uneven threads will have portion+1 repeats, m-uneven will have portion repeats
 	
-	struct targ arg[m];
+	struct targ arg[m];// = malloc(sizeof(struct targ) + 2*n*n*sizeof(int));
 	pthread_t names[m];
 	int k, rest;
 
@@ -187,6 +225,7 @@ int main(int argc, char* argv[]){
 
 
 	for(k=0; k<(m-uneven); k++){ // creating threads
+//		arg+k = malloc(sizeof(struct targ) + 2*n*n*sizeof(int));
 		arg[k].repeat = portion;
 		arg[k].n = n;
 		arg[k].final_res = result;
@@ -195,6 +234,7 @@ int main(int argc, char* argv[]){
 		arg[k].clnum = k;
 		arg[k].n = n;
 		arg[k].mesid = mesid;
+		arg[k].matrix = matrix;
 		if(pthread_create(&(names[k]), NULL, threadf, (void *)(arg+k)) != 0){
 			printf("Error: cannot create the new thread\n");
 			exit(-1);
@@ -210,6 +250,7 @@ int main(int argc, char* argv[]){
 		arg[k].clnum = k;
 		arg[k].n = n;
 		arg[k].mesid = mesid;
+		arg[k].matrix = matrix;
 		if(pthread_create(&(names[k]), NULL, threadf, (void *)(arg+k)) != 0){
 			printf("Error: cannot create the new thread\n");
 			exit(-1);
@@ -228,25 +269,10 @@ int main(int argc, char* argv[]){
 		exit(-1);
 	}
 	
-
-/*	if(close(ST_OUT) < 0){
-		printf("Error: cannot close standard output\n");
-		exit(-1);
-	}
-	
-*/
 	if((fd = open(ANSWERNAME, O_WRONLY|O_CREAT, 0666)) < 0){
 		printf("Error: cannot create the answer file\n");
 		exit(-1);
 	}
-/*
-	for(k = 0; k < counter; k++){
-		printf("%d ", *(result + k));
-		if((k+1)%n == 0){
-			printf("\n");
-		}
-	}
-*/
 	char* num = (char*)malloc(10);
 	char space = ' ';
 	char enter = '\n';
@@ -254,7 +280,7 @@ int main(int argc, char* argv[]){
 	for(k = 0; k < counter; k++){
 		sprintf(num, "%d", *(result+k));
 		num = (char*)realloc(num, strlen(num)+1);
-		if(write(fd, num, sizeof(int)) != sizeof(int)){
+		if(write(fd, num, strlen(num)) != strlen(num)){
 			printf("Error: cannot print the result array\n");
 			exit(-1);
 		}
